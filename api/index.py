@@ -12,37 +12,28 @@ from flask_cors import CORS
 
 load_dotenv()
 
-
 app = Flask(__name__)
-CORS(app, resources={r"/*": {"origins": "*"}})  # temporalmente permite todo; para producción restringe el dominio de Vercel
-Haz commit y push.
-    
-app.secret_key = "110512" 
+CORS(app, resources={r"/*": {"origins": "*"}})
 
+app.secret_key = "110512"
 
-DB_HOST = os.getenv("DB_HOST")
-DB_PORT = os.getenv("DB_PORT")
-DB_NAME = os.getenv("DB_NAME")
-DB_USER = os.getenv("DB_USER")
-DB_PASS = os.getenv("DB_PASS")
+# ================================
+#   SOLO UNA VARIABLE PARA RAILWAY
+# ================================
+DATABASE_URL = os.getenv("DATABASE_URL")
+
 
 # ----------------------------------------
-#   Función de conexión a PostgreSQL
+#   Función de conexión
 # ----------------------------------------
 def get_conn():
     """Establece y devuelve una conexión a la base de datos PostgreSQL."""
     try:
-        return psycopg2.connect(
-            host=DB_HOST,
-            port=DB_PORT,
-            database=DB_NAME,
-            user=DB_USER,
-            password=DB_PASS
-        )
+        return psycopg2.connect(DATABASE_URL)
     except Exception as e:
         print(f"Error al conectar a la base de datos: {e}")
-        # En una aplicación real, se manejaría este error mejor
         raise e
+
 
 def login_required(f):
     """Decorador para asegurar que una ruta solo sea accesible si el usuario ha iniciado sesión."""
@@ -57,13 +48,12 @@ def login_required(f):
 
 # LOGIN (Ruta principal "/")
 @app.route("/", methods=["GET", "POST"])
-@app.route("/login", methods=["GET", "POST"]) 
+@app.route("/login", methods=["GET", "POST"])
 def login():
     if request.method == "POST":
         correo = request.form["correo"]
         password = request.form["contraseña"]
 
-        # Encriptar la contraseña para compararla con la BD
         hashed_password = hashlib.sha256(password.encode()).hexdigest()
 
         conn = None
@@ -95,13 +85,12 @@ def login():
 @app.route("/registro", methods=["GET", "POST"])
 def registro():
     if request.method == "POST":
-        
         nombre = request.form["nombre"]
         apellido = request.form["apellido"]
         correo = request.form["correo"]
         password = request.form["contraseña"]
         telefono = request.form["telefono"]
-        
+
         hashed_password = hashlib.sha256(password.encode()).hexdigest()
 
         conn = None
@@ -109,28 +98,28 @@ def registro():
         try:
             conn = get_conn()
             cur = conn.cursor()
-            
+
             cur.execute("""
                 INSERT INTO clientes (nombre, apellido, correo, contraseña, telefono)
                 VALUES (%s, %s, %s, %s, %s)
             """, (nombre, apellido, correo, hashed_password, telefono))
-            
+
             conn.commit()
             flash("¡Registro exitoso! Por favor, inicia sesión.", "success")
             return redirect(url_for("login"))
-            
+
         except psycopg2.IntegrityError:
             conn.rollback()
             flash("El correo ya está registrado o hay un error de integridad de datos.", "error")
-            
+
         except Exception as e:
             conn.rollback()
             flash(f"Ocurrió un error al registrar: {e}", "error")
-            
+
         finally:
             if cur: cur.close()
             if conn: conn.close()
-    
+
     return render_template("registro.html")
 
 
@@ -165,7 +154,6 @@ def index():
 @app.route("/add_cart", methods=["POST"])
 @login_required
 def add_cart():
-    """Agrega un producto al carrito de compras almacenado en la sesión."""
     try:
         product_id = request.form["id_producto"]
         cantidad = int(request.form["cantidad"])
@@ -177,10 +165,9 @@ def add_cart():
         session["cart"] = {}
 
     carrito = session["cart"]
-    # Sumar la cantidad si el producto ya existe en el carrito
     carrito[product_id] = carrito.get(product_id, 0) + cantidad
-    session.modified = True # Asegura que Flask guarde el cambio
-    
+    session.modified = True
+
     flash(f"Producto {product_id} agregado al carrito.", "success")
     return redirect(url_for("index"))
 
@@ -188,7 +175,6 @@ def add_cart():
 @app.route("/carrito")
 @login_required
 def carrito():
-    """Muestra el contenido del carrito, consultando detalles de productos de la BD."""
     if "cart" not in session or len(session["cart"]) == 0:
         return render_template("carrito.html", items=[], total=0)
 
@@ -201,7 +187,7 @@ def carrito():
     for idp, qty in session["cart"].items():
         cur.execute("SELECT * FROM productos WHERE id_producto = %s", (idp,))
         p = cur.fetchone()
-        
+
         if p:
             subtotal = p["precio"] * qty
             items.append({"producto": p, "cantidad": qty, "subtotal": subtotal})
@@ -213,58 +199,50 @@ def carrito():
     return render_template("carrito.html", items=items, total=total)
 
 
-# ======================================================
-#               ELIMINAR PRODUCTO DEL CARRITO
-# ======================================================
 @app.route("/eliminar/<int:idp>")
 @login_required
 def eliminar(idp):
-    """
-    Elimina un producto del carrito (session['cart']) por su ID.
-    """
-    idp_str = str(idp) 
+    idp_str = str(idp)
 
     if "cart" in session:
         if idp_str in session["cart"]:
             session["cart"].pop(idp_str)
-            session.modified = True 
-            flash(f"Producto eliminado del carrito.", "info")
+            session.modified = True
+            flash("Producto eliminado del carrito.", "info")
         else:
             flash("Ese producto no se encontró en tu carrito.", "error")
     else:
         flash("Tu carrito está vacío.", "warning")
 
-    return redirect(url_for("carrito")) 
+    return redirect(url_for("carrito"))
 
 
 # ======================================================
-#             COMPRAR (Captura datos y ticket)
+#                     COMPRAR
 # ======================================================
 
 @app.route("/comprar", methods=["GET", "POST"])
 @login_required
 def comprar():
-    id_cliente_existente = session.get("id_cliente") 
-    
+    id_cliente_existente = session.get("id_cliente")
+
     if not id_cliente_existente:
         flash("Tu sesión expiró. Por favor, vuelve a iniciar sesión.", "error")
         return redirect(url_for("login"))
-    
+
     if request.method == "GET":
         return render_template("comprar.html")
 
-    # --- DATOS DE ENVÍO Y PAGO ---
-    codigo_postal = request.form.get("CP", "N/A") 
+    codigo_postal = request.form.get("CP", "N/A")
     calle = request.form.get("calle", "N/A")
     num_ext = request.form.get("num_ext", "S/N")
     num_int = request.form.get("num_int", "")
     metodo_pago = request.form.get("metodo_pago", "N/A")
-    
+
     conn = get_conn()
     cur = conn.cursor(cursor_factory=RealDictCursor)
-    
+
     if "cart" in session and session["cart"]:
-        
         try:
             for idp, qty in session["cart"].items():
                 cur.execute("SELECT precio, stock FROM productos WHERE id_producto = %s", (idp,))
@@ -274,12 +252,12 @@ def comprar():
                     flash(f"Error: Producto con ID {idp} no encontrado.", "error")
                     conn.rollback()
                     return redirect(url_for("carrito"))
-                
+
                 if result["stock"] < qty:
                     flash(f"Error: Stock insuficiente para el producto {idp}.", "error")
                     conn.rollback()
                     return redirect(url_for("carrito"))
-                    
+
                 precio = result["precio"]
                 total_item = precio * qty
 
@@ -293,36 +271,36 @@ def comprar():
                 """, (qty, idp))
 
             conn.commit()
-            
+
         except Exception as e:
             conn.rollback()
             flash(f"Ocurrió un error al procesar la compra: {e}", "error")
             return redirect(url_for("carrito"))
-            
+
         finally:
             if cur: cur.close()
             if conn: conn.close()
-        
+
     else:
         flash("Tu carrito de compras está vacío.", "warning")
         return redirect(url_for("index"))
 
     session.pop("cart", None)
-    
+
     flash("¡Compra realizada con éxito! Generando su ticket.", "success")
-    
-    return redirect(url_for("ticket", 
-        id_cliente=id_cliente_existente, 
-        cp=codigo_postal,
-        calle=calle,
-        num_ext=num_ext,
-        num_int=num_int,
-        metodo_pago=metodo_pago
-    ))
+
+    return redirect(url_for("ticket",
+                            id_cliente=id_cliente_existente,
+                            cp=codigo_postal,
+                            calle=calle,
+                            num_ext=num_ext,
+                            num_int=num_int,
+                            metodo_pago=metodo_pago
+                            ))
 
 
 # ======================================================
-#                     TICKET PDF
+#                   TICKET PDF
 # ======================================================
 
 @app.route("/ticket/<int:id_cliente>")
@@ -360,11 +338,11 @@ def ticket(id_cliente):
     pdf.setFillColorRGB(0.36, 0.25, 0.62)
     pdf.setFont("Helvetica-Bold", 20)
     pdf.drawString(50, 750, "THE 4 FANTASTIC - Ticket de Compra")
-    
+
     pdf.setFillColorRGB(0.1, 0.1, 0.1)
     pdf.setFont("Helvetica", 12)
     y = 720
-    
+
     cliente = ventas[0]
     pdf.drawString(50, y, f"Cliente: {cliente['nombre']} {cliente['apellido']}")
     pdf.drawString(300, y, f"Fecha: {cliente['fecha_salida'].strftime('%d/%m/%Y')}")
@@ -379,14 +357,14 @@ def ticket(id_cliente):
     numeros = f"Ext: {num_ext}"
     if num_int:
         numeros += f" Int: {num_int}"
-        
+
     pdf.drawString(50, y, direccion_completa)
     pdf.drawString(300, y, numeros)
     y -= 15
     pdf.drawString(50, y, f"Código Postal: {cp}")
     pdf.drawString(300, y, f"Método de Pago: {metodo_pago}")
     y -= 30
-    
+
     pdf.setFont("Helvetica-Bold", 11)
     pdf.drawString(50, y, "PRODUCTO")
     pdf.drawString(125, y, "MARCA")
@@ -408,7 +386,7 @@ def ticket(id_cliente):
         pdf.drawString(400, y, f"${total_str}")
         subtotal_total += v["total"]
         y -= 20
-        
+
         if y < 50:
             pdf.showPage()
             pdf.setFont("Helvetica", 12)
@@ -425,5 +403,9 @@ def ticket(id_cliente):
 
     return send_file(buffer, as_attachment=True, download_name="ticket.pdf", mimetype="application/pdf")
 
+
+# ======================================================
+#             EJECUCIÓN LOCAL
+# ======================================================
 if __name__ == "__main__":
-    app.run(host="127.0.0.1", port=5025, debug=True)
+    app.run(host="0.0.0.0", port=5000)
