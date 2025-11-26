@@ -8,12 +8,15 @@ import os
 from dotenv import load_dotenv
 import hashlib
 from functools import wraps
-
+from flask_cors import CORS
 
 load_dotenv()
 
-app = Flask(__name__)
 
+app = Flask(__name__)
+CORS(app, resources={r"/*": {"origins": "*"}})  # temporalmente permite todo; para producción restringe el dominio de Vercel
+Haz commit y push.
+    
 app.secret_key = "110512" 
 
 
